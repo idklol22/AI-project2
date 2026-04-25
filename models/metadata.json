@@ -1,0 +1,63 @@
+{
+  "label_classes": [
+    "bearing_wear_early",
+    "bearing_wear_severe",
+    "combined_fault",
+    "imbalance_early",
+    "imbalance_severe",
+    "misalignment_early",
+    "misalignment_severe",
+    "normal"
+  ],
+  "feature_columns": [
+    "rms",
+    "peak_to_peak",
+    "kurtosis",
+    "skewness",
+    "crest_factor",
+    "spectral_centroid",
+    "spectral_bandwidth",
+    "spectral_rolloff",
+    "dominant_frequency",
+    "frequency_rms",
+    "entropy",
+    "impulse_factor",
+    "clearance_factor",
+    "band_energy_1_5kHz",
+    "snr_estimated"
+  ],
+  "scaler_mean": [
+    0.8407946508191526,
+    6.094158617657423,
+    -0.4883795410928891,
+    -0.0011427993240989054,
+    4.492644173693657,
+    1852.8445905456542,
+    1614.5210739379884,
+    685.4465332280636,
+    172.75292593533993,
+    53.811638711690904,
+    3.4850442671179773,
+    5.403872522467375,
+    6.222310144436359,
+    746728.9477118164,
+    -20.96633750424385
+  ],
+  "scaler_scale": [
+    0.3809603885799872,
+    3.421277451485218,
+    0.5915539152829699,
+    0.42089893477503726,
+    1.679323947787677,
+    288.25568391949224,
+    55.32812757382444,
+    1182.6756454201009,
+    670.4894234528958,
+    24.38379601427354,
+    0.3082683590404397,
+    2.0508762825990665,
+    2.4053107913391027,
+    1103679.5979229708,
+    3.9243661559138188
+  ]
+}

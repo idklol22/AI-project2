@@ -1,12 +1,14 @@
 """
 Streamlit Frontend — Predictive Maintenance Dashboard
 ======================================================
-A premium, dark-themed dashboard that provides:
+A premium, light-themed dashboard that provides:
   1. Manual feature input form (15 vibration features + metadata)
-  2. CSV batch upload for bulk predictions
-  3. ONNX model inference with real-time results
-  4. Confidence gauges, severity indicators, and fault distribution charts
-  5. Email alert configuration & one-click sending
+  2. Sliders below each input for quick adjustment
+  3. Randomize button to populate all fields with random values
+  4. CSV batch upload for bulk predictions
+  5. ONNX model inference with real-time results
+  6. Confidence gauges, severity indicators, and fault distribution charts
+  7. Email alert configuration & one-click sending
 """
 
 import os
@@ -28,7 +30,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── custom CSS ─────────────────────────────────────────────────────────────
+# ─── custom CSS — LIGHT THEME ──────────────────────────────────────────────
 
 st.markdown("""
 <style>
@@ -39,17 +41,17 @@ html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
 }
 .stApp {
-    background: linear-gradient(180deg, #0a0a1a 0%, #111128 50%, #0d0d20 100%);
+    background: linear-gradient(180deg, #f8f9fc 0%, #eef1f8 50%, #f0f2f8 100%);
 }
 
 /* header card */
 .hero-card {
-    background: linear-gradient(135deg, #1a1a3e 0%, #2d1b69 50%, #1a1a3e 100%);
-    border: 1px solid rgba(120, 80, 255, 0.2);
+    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #6366f1 100%);
+    border: none;
     border-radius: 16px;
     padding: 32px 40px;
     margin-bottom: 24px;
-    box-shadow: 0 8px 32px rgba(80, 40, 200, 0.15);
+    box-shadow: 0 8px 32px rgba(79, 70, 229, 0.25);
 }
 .hero-card h1 {
     color: #fff;
@@ -59,53 +61,72 @@ html, body, [class*="css"] {
     letter-spacing: -0.5px;
 }
 .hero-card p {
-    color: #a0a0d0;
+    color: rgba(255,255,255,0.75);
     font-size: 14px;
     margin: 8px 0 0 0;
 }
 
 /* metric cards */
 .metric-card {
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08);
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
     border-radius: 12px;
     padding: 20px 24px;
     text-align: center;
-    backdrop-filter: blur(10px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 .metric-card .label {
-    color: #888;
+    color: #6b7280;
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-bottom: 8px;
 }
 .metric-card .value {
-    color: #fff;
+    color: #1f2937;
     font-size: 28px;
     font-weight: 700;
 }
 
 /* severity badges */
-.badge-high { background: #ff3333; color: #fff; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; }
-.badge-early { background: #ffa500; color: #1a1a2e; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; }
-.badge-normal { background: #33cc66; color: #1a1a2e; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; }
+.badge-high { background: #ef4444; color: #fff; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
+.badge-early { background: #f59e0b; color: #1a1a2e; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
+.badge-normal { background: #10b981; color: #fff; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
+
+/* feature input card */
+.feature-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+}
+.feature-card .feat-label {
+    color: #374151;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
 
 /* sidebar */
 section[data-testid="stSidebar"] {
-    background: #0d0d1f;
-    border-right: 1px solid rgba(255,255,255,0.06);
+    background: #ffffff;
+    border-right: 1px solid #e5e7eb;
+}
+section[data-testid="stSidebar"] .stMarkdown h3 {
+    color: #1f2937 !important;
 }
 
 /* input labels */
-.stTextInput label, .stNumberInput label, .stSelectbox label {
-    color: #c0c0e0 !important;
+.stTextInput label, .stNumberInput label, .stSelectbox label, .stSlider label {
+    color: #374151 !important;
     font-weight: 500 !important;
 }
 
-/* buttons */
+/* buttons — primary */
 .stButton > button {
-    background: linear-gradient(135deg, #6c3fe0, #8b5cf6) !important;
+    background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
     color: #fff !important;
     border: none !important;
     border-radius: 8px !important;
@@ -114,9 +135,27 @@ section[data-testid="stSidebar"] {
     transition: all 0.3s ease !important;
 }
 .stButton > button:hover {
-    background: linear-gradient(135deg, #7c4ff0, #9b6cf6) !important;
-    box-shadow: 0 4px 20px rgba(108, 63, 224, 0.4) !important;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+    box-shadow: 0 4px 20px rgba(79, 70, 229, 0.35) !important;
     transform: translateY(-1px) !important;
+}
+
+/* randomize button styling via key */
+div[data-testid="stButton"][class*="randomize"] > button {
+    background: linear-gradient(135deg, #f59e0b, #d97706) !important;
+}
+
+/* section headers */
+.section-header {
+    color: #1f2937;
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+.section-sub {
+    color: #6b7280;
+    font-size: 14px;
+    margin-bottom: 16px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -135,22 +174,23 @@ FEATURE_COLS = [
     "clearance_factor", "band_energy_1_5kHz", "snr_estimated",
 ]
 
+# (label, slider_min, slider_max, default, step)
 FEATURE_DESCRIPTIONS = {
-    "rms": ("RMS Amplitude", 0.0, 5.0, 0.5),
-    "peak_to_peak": ("Peak-to-Peak", 0.0, 15.0, 1.5),
-    "kurtosis": ("Kurtosis", -3.0, 20.0, 3.0),
-    "skewness": ("Skewness", -3.0, 3.0, 0.0),
-    "crest_factor": ("Crest Factor", 1.0, 10.0, 3.0),
-    "spectral_centroid": ("Spectral Centroid (Hz)", 0.0, 5000.0, 1500.0),
-    "spectral_bandwidth": ("Spectral Bandwidth (Hz)", 0.0, 3000.0, 800.0),
-    "spectral_rolloff": ("Spectral Roll-off (Hz)", 0.0, 5000.0, 2500.0),
-    "dominant_frequency": ("Dominant Frequency (Hz)", 0.0, 5000.0, 500.0),
-    "frequency_rms": ("Frequency-Domain RMS", 0.0, 100.0, 10.0),
-    "entropy": ("Signal Entropy", 0.0, 6.0, 3.0),
-    "impulse_factor": ("Impulse Factor", 1.0, 15.0, 3.0),
-    "clearance_factor": ("Clearance Factor", 1.0, 20.0, 4.0),
-    "band_energy_1_5kHz": ("Band Energy 1-5 kHz", 0.0, 50000.0, 5000.0),
-    "snr_estimated": ("Estimated SNR (dB)", -10.0, 50.0, 15.0),
+    "rms":                 ("RMS Amplitude",            0.0, 10.0,    0.5,     0.01),
+    "peak_to_peak":        ("Peak-to-Peak",             0.0, 30.0,    1.5,     0.01),
+    "kurtosis":            ("Kurtosis",               -10.0, 50.0,    3.0,     0.1),
+    "skewness":            ("Skewness",               -10.0, 10.0,    0.0,     0.01),
+    "crest_factor":        ("Crest Factor",             0.0, 20.0,    3.0,     0.01),
+    "spectral_centroid":   ("Spectral Centroid (Hz)",   0.0, 10000.0, 1500.0,  1.0),
+    "spectral_bandwidth":  ("Spectral Bandwidth (Hz)",  0.0, 8000.0,  800.0,   1.0),
+    "spectral_rolloff":    ("Spectral Roll-off (Hz)",   0.0, 10000.0, 2500.0,  1.0),
+    "dominant_frequency":  ("Dominant Frequency (Hz)",  0.0, 10000.0, 500.0,   1.0),
+    "frequency_rms":       ("Frequency-Domain RMS",     0.0, 500.0,   10.0,    0.1),
+    "entropy":             ("Signal Entropy",           0.0, 10.0,    3.0,     0.01),
+    "impulse_factor":      ("Impulse Factor",           0.0, 30.0,    3.0,     0.01),
+    "clearance_factor":    ("Clearance Factor",         0.0, 50.0,    4.0,     0.01),
+    "band_energy_1_5kHz":  ("Band Energy 1-5 kHz",     0.0, 200000.0, 5000.0, 10.0),
+    "snr_estimated":       ("Estimated SNR (dB)",     -30.0, 80.0,    15.0,    0.1),
 }
 
 
@@ -199,6 +239,59 @@ def predict(session, features: np.ndarray, meta: dict) -> dict:
     }
 
 
+# ─── session state init for feature values ─────────────────────────────────
+# Use widget keys directly as the source of truth.
+# Initialize them once so both number_input and slider start in sync.
+
+for _feat in FEATURE_COLS:
+    _default = FEATURE_DESCRIPTIONS[_feat][3]
+    if f"num_{_feat}" not in st.session_state:
+        st.session_state[f"num_{_feat}"] = _default
+    if f"slider_{_feat}" not in st.session_state:
+        st.session_state[f"slider_{_feat}"] = _default
+
+
+def _sync_from_number(feat_key):
+    """Callback: when number_input changes, push value into the slider key."""
+    val = st.session_state[f"num_{feat_key}"]
+    desc, s_min, s_max, _, _ = FEATURE_DESCRIPTIONS[feat_key]
+    # clamp for the slider (slider has range limits), but keep number unrestricted
+    st.session_state[f"slider_{feat_key}"] = float(np.clip(val, s_min, s_max))
+
+
+def _sync_from_slider(feat_key):
+    """Callback: when slider changes, push value into the number_input key."""
+    st.session_state[f"num_{feat_key}"] = st.session_state[f"slider_{feat_key}"]
+
+
+def randomize_features():
+    """Randomize all feature values — sets BOTH widget keys directly."""
+    rng = np.random.default_rng()
+    random_ranges = {
+        "rms":                (0.1,  4.0),
+        "peak_to_peak":       (0.5,  20.0),
+        "kurtosis":           (-2.0, 30.0),
+        "skewness":           (-2.0, 2.0),
+        "crest_factor":       (1.5,  8.0),
+        "spectral_centroid":  (200.0, 4500.0),
+        "spectral_bandwidth": (100.0, 3500.0),
+        "spectral_rolloff":   (500.0, 5000.0),
+        "dominant_frequency": (10.0,  5000.0),
+        "frequency_rms":      (1.0,   80.0),
+        "entropy":            (1.5,  5.0),
+        "impulse_factor":     (1.5,  12.0),
+        "clearance_factor":   (1.5,  15.0),
+        "band_energy_1_5kHz": (100.0, 80000.0),
+        "snr_estimated":      (-5.0,  40.0),
+    }
+    for feat in FEATURE_COLS:
+        lo, hi = random_ranges[feat]
+        val = round(float(rng.uniform(lo, hi)), 4)
+        st.session_state[f"num_{feat}"] = val
+        desc, s_min, s_max, _, _ = FEATURE_DESCRIPTIONS[feat]
+        st.session_state[f"slider_{feat}"] = float(np.clip(val, s_min, s_max))
+
+
 # ─── sidebar ───────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -234,7 +327,7 @@ with st.sidebar:
 st.markdown("""
 <div class="hero-card">
     <h1>⚙️ Caterpillar Predictive Maintenance</h1>
-    <p>CNN-LSTM Deep Learning Model • Real-Time Fault Detection • Automated Alerts</p>
+    <p>CNN-LSTM Deep Learning Model &bull; Real-Time Fault Detection &bull; Automated Alerts</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -246,7 +339,7 @@ meta = load_metadata()
 
 if session is None or meta is None:
     st.warning(
-        "⚠️ Model files not found. Please run the training pipeline first:\n\n"
+        "Model files not found. Please run the training pipeline first:\n\n"
         "```bash\n"
         "python src/generate_dataset.py\n"
         "python src/train.py\n"
@@ -259,61 +352,92 @@ if session is None or meta is None:
 # ── Manual Input Mode ──
 
 if mode == "Manual Input":
-    st.markdown("### 📊 Enter Vibration Features")
-    st.markdown("Provide the 15 engineered features from the vibration sensor reading.")
+    st.markdown('<div class="section-header">📊 Enter Vibration Features</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Provide the 15 engineered features from the vibration sensor reading. Use the sliders or type any value directly.</div>', unsafe_allow_html=True)
 
+    # ── Randomize button ──
+    col_rand, col_spacer = st.columns([1, 3])
+    with col_rand:
+        if st.button("🎲 Randomize All Inputs", use_container_width=True, key="randomize_btn"):
+            randomize_features()
+            st.rerun()
+
+    st.markdown("")
+
+    # ── Feature input grid: 3 columns ──
     cols = st.columns(3)
-    feature_values = {}
     for i, feat in enumerate(FEATURE_COLS):
-        desc, min_v, max_v, default = FEATURE_DESCRIPTIONS[feat]
+        desc, slider_min, slider_max, default, step_val = FEATURE_DESCRIPTIONS[feat]
+
         with cols[i % 3]:
-            feature_values[feat] = st.number_input(
-                desc, min_value=min_v, max_value=max_v, value=default,
-                step=(max_v - min_v) / 100, format="%.4f", key=feat,
+            st.markdown(f'<div class="feature-card"><div class="feat-label">{desc}</div></div>', unsafe_allow_html=True)
+
+            # number input — NO min/max range barrier
+            # The key IS the source of truth; Streamlit reads the value from session_state[key]
+            st.number_input(
+                desc,
+                value=float(default),  # only used on very first render
+                step=step_val,
+                format="%.4f",
+                key=f"num_{feat}",
+                on_change=_sync_from_number,
+                args=(feat,),
+                label_visibility="collapsed",
+            )
+
+            # slider below — synced bidirectionally
+            st.slider(
+                f"{desc} slider",
+                min_value=float(slider_min),
+                max_value=float(slider_max),
+                value=float(default),  # only used on very first render
+                step=step_val,
+                key=f"slider_{feat}",
+                on_change=_sync_from_slider,
+                args=(feat,),
+                label_visibility="collapsed",
             )
 
     st.markdown("---")
 
     if st.button("🔍 Run Prediction", use_container_width=True):
-        features = np.array([feature_values[f] for f in FEATURE_COLS], dtype=np.float32)
+        # read values from the number_input widget keys (unrestricted source of truth)
+        features = np.array([st.session_state[f"num_{f}"] for f in FEATURE_COLS], dtype=np.float32)
         result = predict(session, features, meta)
 
         # ── results display ──
-        st.markdown("### 🎯 Prediction Results")
+        st.markdown('<div class="section-header">🎯 Prediction Results</div>', unsafe_allow_html=True)
 
         r1, r2, r3, r4 = st.columns(4)
         with r1:
             fault_display = result["fault_class"].replace("_", " ").title()
             badge_class = "badge-high" if "severe" in result["fault_class"] or "combined" in result["fault_class"] \
                 else ("badge-early" if "early" in result["fault_class"] else "badge-normal")
+            sev_text = "SEVERE" if "severe" in result["fault_class"] or "combined" in result["fault_class"] \
+                else ("EARLY" if "early" in result["fault_class"] else "NORMAL")
             st.markdown(f"""
             <div class="metric-card">
                 <div class="label">Detected Fault</div>
                 <div class="value" style="font-size: 18px;">{fault_display}</div>
-                <div style="margin-top: 8px;"><span class="{badge_class}">
-                    {"SEVERE" if "severe" in result["fault_class"] or "combined" in result["fault_class"]
-                     else ("EARLY" if "early" in result["fault_class"] else "NORMAL")}
-                </span></div>
+                <div style="margin-top: 8px;"><span class="{badge_class}">{sev_text}</span></div>
             </div>
             """, unsafe_allow_html=True)
 
         with r2:
+            conf_color = "#10b981" if result["confidence"] > 0.8 else "#f59e0b"
             st.markdown(f"""
             <div class="metric-card">
                 <div class="label">Confidence</div>
-                <div class="value" style="color: {'#33cc66' if result['confidence'] > 0.8 else '#ffa500'};">
-                    {result['confidence']:.1%}
-                </div>
+                <div class="value" style="color: {conf_color};">{result['confidence']:.1%}</div>
             </div>
             """, unsafe_allow_html=True)
 
         with r3:
+            ef_color = "#ef4444" if result["early_fault_probability"] > 0.5 else "#10b981"
             st.markdown(f"""
             <div class="metric-card">
                 <div class="label">Early Fault Prob.</div>
-                <div class="value" style="color: {'#ff3333' if result['early_fault_probability'] > 0.5 else '#33cc66'};">
-                    {result['early_fault_probability']:.1%}
-                </div>
+                <div class="value" style="color: {ef_color};">{result['early_fault_probability']:.1%}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -321,7 +445,7 @@ if mode == "Manual Input":
             st.markdown(f"""
             <div class="metric-card">
                 <div class="label">Machine</div>
-                <div class="value" style="font-size: 16px;">{machine_id}<br/><span style="font-size: 12px; color: #888;">{sensor_loc.replace('_',' ').title()}</span></div>
+                <div class="value" style="font-size: 16px;">{machine_id}<br/><span style="font-size: 12px; color: #6b7280;">{sensor_loc.replace('_',' ').title()}</span></div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -330,24 +454,24 @@ if mode == "Manual Input":
         fig_gauge = go.Figure(go.Indicator(
             mode="gauge+number",
             value=result["confidence"] * 100,
-            number={"suffix": "%", "font": {"color": "#fff"}},
+            number={"suffix": "%", "font": {"color": "#1f2937"}},
             gauge={
-                "axis": {"range": [0, 100], "tickcolor": "#555"},
-                "bar": {"color": "#8b5cf6"},
-                "bgcolor": "#1a1a3e",
-                "bordercolor": "#333",
+                "axis": {"range": [0, 100], "tickcolor": "#9ca3af"},
+                "bar": {"color": "#6366f1"},
+                "bgcolor": "#f3f4f6",
+                "bordercolor": "#d1d5db",
                 "steps": [
-                    {"range": [0, 50], "color": "#2a1a3e"},
-                    {"range": [50, 80], "color": "#3a2a4e"},
-                    {"range": [80, 100], "color": "#4a3a5e"},
+                    {"range": [0, 50], "color": "#fef2f2"},
+                    {"range": [50, 80], "color": "#fefce8"},
+                    {"range": [80, 100], "color": "#f0fdf4"},
                 ],
                 "threshold": {
-                    "line": {"color": "#ff3333", "width": 3},
+                    "line": {"color": "#ef4444", "width": 3},
                     "thickness": 0.8,
                     "value": 90,
                 },
             },
-            title={"text": "Model Confidence", "font": {"color": "#a0a0d0", "size": 14}},
+            title={"text": "Model Confidence", "font": {"color": "#6b7280", "size": 14}},
         ))
         fig_gauge.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
@@ -367,17 +491,17 @@ if mode == "Manual Input":
         fig_bar = px.bar(
             prob_df, x="Probability", y="Fault Class", orientation="h",
             color="Probability",
-            color_continuous_scale=["#1a1a3e", "#6c3fe0", "#ff3333"],
+            color_continuous_scale=["#e0e7ff", "#6366f1", "#ef4444"],
         )
         fig_bar.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#c0c0e0",
+            font_color="#374151",
             height=350,
             margin=dict(t=20, b=20),
             showlegend=False,
-            xaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
-            yaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
+            xaxis=dict(gridcolor="rgba(0,0,0,0.06)"),
+            yaxis=dict(gridcolor="rgba(0,0,0,0.06)"),
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -408,18 +532,18 @@ if mode == "Manual Input":
                         email_cfg=email_cfg,
                     )
                     if success:
-                        st.success("✅ Alert email sent successfully!")
+                        st.success("Alert email sent successfully!")
                     else:
-                        st.error("❌ Failed to send email. Check your SMTP settings.")
+                        st.error("Failed to send email. Check your SMTP settings.")
             else:
-                st.info("💡 Enable Email Alerts in the sidebar to send notifications.")
+                st.info("Enable Email Alerts in the sidebar to send notifications.")
 
 
 # ── CSV Upload Mode ──
 
 elif mode == "CSV Upload":
-    st.markdown("### 📁 Upload Sensor Data CSV")
-    st.markdown("Upload a CSV file with the 15 vibration feature columns for batch prediction.")
+    st.markdown('<div class="section-header">📁 Upload Sensor Data CSV</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Upload a CSV file with the 15 vibration feature columns for batch prediction.</div>', unsafe_allow_html=True)
 
     uploaded = st.file_uploader("Choose a CSV file", type=["csv"])
 
@@ -464,13 +588,13 @@ elif mode == "CSV Upload":
             fig_pie = px.pie(
                 values=class_counts.values,
                 names=class_counts.index,
-                color_discrete_sequence=px.colors.sequential.Plasma_r,
+                color_discrete_sequence=px.colors.sequential.Purples_r,
                 hole=0.4,
             )
             fig_pie.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#c0c0e0",
+                font_color="#374151",
                 height=400,
             )
             st.plotly_chart(fig_pie, use_container_width=True)
@@ -481,7 +605,7 @@ elif mode == "CSV Upload":
 
             # download
             csv = display_df.to_csv(index=False)
-            st.download_button("⬇️ Download Results CSV", csv, "predictions.csv", "text/csv")
+            st.download_button("Download Results CSV", csv, "predictions.csv", "text/csv")
 
             # email alert for faults
             if fault_count > 0 and email_enabled:
@@ -496,7 +620,7 @@ elif mode == "CSV Upload":
                         "password": email_pass,
                         "from_address": from_addr,
                         "recipients": [r.strip() for r in recipients.strip().split("\n") if r.strip()],
-                        "subject_prefix": "[FAULT ALERT — BATCH]",
+                        "subject_prefix": "[FAULT ALERT - BATCH]",
                     }
                     # send one alert for the most severe fault
                     worst = res_df.loc[res_df["confidence"].idxmax()]
@@ -508,16 +632,16 @@ elif mode == "CSV Upload":
                         sensor_location=sensor_loc,
                         email_cfg=email_cfg,
                     )
-                    st.success(f"✅ Alert sent for {int(fault_count)} detected faults.")
+                    st.success(f"Alert sent for {int(fault_count)} detected faults.")
 
 
 # ─── footer ─────────────────────────────────────────────────────────────────
 
 st.markdown("---")
 st.markdown(
-    "<p style='text-align: center; color: #555; font-size: 12px;'>"
-    "Caterpillar Inc. — Predictive Maintenance Health Monitoring System • "
-    f"Built with Streamlit • {datetime.now().year}"
+    "<p style='text-align: center; color: #9ca3af; font-size: 12px;'>"
+    "Caterpillar Inc. - Predictive Maintenance Health Monitoring System | "
+    f"Built with Streamlit | {datetime.now().year}"
     "</p>",
     unsafe_allow_html=True,
 )

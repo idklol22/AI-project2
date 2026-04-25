@@ -193,11 +193,11 @@ def train(cfg: dict):
                 "val_f1": f1,
                 "val_ef_recall": ef_recall,
             }, os.path.join(ckpt_dir, "best_model.pt"))
-            print(f"  ✓ Best checkpoint saved (EF-Recall={ef_recall:.4f})")
+            print(f"  [BEST] Checkpoint saved (EF-Recall={ef_recall:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= tcfg["early_stop_patience"]:
-                print(f"  ✗ Early stopping at epoch {epoch}")
+                print(f"  [STOP] Early stopping at epoch {epoch}")
                 break
 
     # final report
