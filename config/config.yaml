@@ -18,15 +18,8 @@ data:
     - CAT-TB-002
     - CAT-DZ-001
 
-  sensor_locations:
-    - bearing_left
-    - bearing_right
-    - gearbox
-    - turbine_blade
-    - shaft_coupling
-    - motor_housing
-
 model:
+  num_features: 16             # 15 vibration + 1 machine_id_encoded
   cnn_channels: [32, 64, 128]
   cnn_kernel_sizes: [7, 5, 3]
   lstm_hidden: 128

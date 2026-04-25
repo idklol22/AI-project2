@@ -1,14 +1,14 @@
 """
-Streamlit Frontend — Predictive Maintenance Dashboard
+Streamlit Frontend -- Predictive Maintenance Dashboard
 ======================================================
 A premium, light-themed dashboard that provides:
-  1. Manual feature input form (15 vibration features + metadata)
+  1. Manual feature input form (15 vibration features + machine_id)
   2. Sliders below each input for quick adjustment
   3. Randomize button to populate all fields with random values
   4. CSV batch upload for bulk predictions
   5. ONNX model inference with real-time results
   6. Confidence gauges, severity indicators, and fault distribution charts
-  7. Email alert configuration & one-click sending
+  7. Email alert configuration with preview and one-click sending
 """
 
 import os
@@ -21,22 +21,21 @@ import plotly.express as px
 import onnxruntime as ort
 from datetime import datetime
 
-# ─── page config ────────────────────────────────────────────────────────────
+# ---- page config ----------------------------------------------------------
 
 st.set_page_config(
     page_title="Caterpillar Predictive Maintenance",
-    page_icon="⚙️",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─── custom CSS — LIGHT THEME ──────────────────────────────────────────────
+# ---- custom CSS -- LIGHT THEME --------------------------------------------
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-/* global */
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
 }
@@ -44,7 +43,6 @@ html, body, [class*="css"] {
     background: linear-gradient(180deg, #f8f9fc 0%, #eef1f8 50%, #f0f2f8 100%);
 }
 
-/* header card */
 .hero-card {
     background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #6366f1 100%);
     border: none;
@@ -66,7 +64,6 @@ html, body, [class*="css"] {
     margin: 8px 0 0 0;
 }
 
-/* metric cards */
 .metric-card {
     background: #ffffff;
     border: 1px solid #e5e7eb;
@@ -88,12 +85,10 @@ html, body, [class*="css"] {
     font-weight: 700;
 }
 
-/* severity badges */
 .badge-high { background: #ef4444; color: #fff; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
 .badge-early { background: #f59e0b; color: #1a1a2e; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
 .badge-normal { background: #10b981; color: #fff; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
 
-/* feature input card */
 .feature-card {
     background: #ffffff;
     border: 1px solid #e5e7eb;
@@ -109,7 +104,6 @@ html, body, [class*="css"] {
     margin-bottom: 6px;
 }
 
-/* sidebar */
 section[data-testid="stSidebar"] {
     background: #ffffff;
     border-right: 1px solid #e5e7eb;
@@ -118,13 +112,11 @@ section[data-testid="stSidebar"] .stMarkdown h3 {
     color: #1f2937 !important;
 }
 
-/* input labels */
 .stTextInput label, .stNumberInput label, .stSelectbox label, .stSlider label {
     color: #374151 !important;
     font-weight: 500 !important;
 }
 
-/* buttons — primary */
 .stButton > button {
     background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
     color: #fff !important;
@@ -140,12 +132,6 @@ section[data-testid="stSidebar"] .stMarkdown h3 {
     transform: translateY(-1px) !important;
 }
 
-/* randomize button styling via key */
-div[data-testid="stButton"][class*="randomize"] > button {
-    background: linear-gradient(135deg, #f59e0b, #d97706) !important;
-}
-
-/* section headers */
 .section-header {
     color: #1f2937;
     font-size: 20px;
@@ -161,18 +147,31 @@ div[data-testid="stButton"][class*="randomize"] > button {
 """, unsafe_allow_html=True)
 
 
-# ─── load model & metadata ─────────────────────────────────────────────────
+# ---- constants ------------------------------------------------------------
 
 MODELS_DIR = "models"
 ONNX_PATH = os.path.join(MODELS_DIR, "fault_detector.onnx")
 META_PATH = os.path.join(MODELS_DIR, "metadata.json")
 
-FEATURE_COLS = [
+# Machine ID mapping (must match generate_dataset.py)
+MACHINE_ID_MAP = {
+    "CAT-EX-001": 0,
+    "CAT-EX-002": 1,
+    "CAT-TB-001": 2,
+    "CAT-TB-002": 3,
+    "CAT-DZ-001": 4,
+}
+MACHINE_IDS = list(MACHINE_ID_MAP.keys())
+
+VIBRATION_FEATURE_COLS = [
     "rms", "peak_to_peak", "kurtosis", "skewness", "crest_factor",
     "spectral_centroid", "spectral_bandwidth", "spectral_rolloff",
     "dominant_frequency", "frequency_rms", "entropy", "impulse_factor",
     "clearance_factor", "band_energy_1_5kHz", "snr_estimated",
 ]
+
+# All 16 features fed to the model (15 vibration + machine_id_encoded)
+ALL_FEATURE_COLS = VIBRATION_FEATURE_COLS + ["machine_id_encoded"]
 
 # (label, slider_min, slider_max, default, step)
 FEATURE_DESCRIPTIONS = {
@@ -194,6 +193,8 @@ FEATURE_DESCRIPTIONS = {
 }
 
 
+# ---- model loading --------------------------------------------------------
+
 @st.cache_resource
 def load_onnx_session():
     if not os.path.exists(ONNX_PATH):
@@ -210,15 +211,13 @@ def load_metadata():
 
 
 def predict(session, features: np.ndarray, meta: dict) -> dict:
-    """Run ONNX inference and return structured result."""
-    # standardise using saved scaler params
+    """Run ONNX inference on 16-feature input and return structured result."""
     mean = np.array(meta["scaler_mean"], dtype=np.float32)
     scale = np.array(meta["scaler_scale"], dtype=np.float32)
     x = ((features - mean) / scale).reshape(1, -1).astype(np.float32)
 
     cls_logits, ef_logit = session.run(None, {"features": x})
 
-    # softmax
     exp = np.exp(cls_logits[0] - np.max(cls_logits[0]))
     probs = exp / exp.sum()
 
@@ -226,7 +225,6 @@ def predict(session, features: np.ndarray, meta: dict) -> dict:
     pred_class = meta["label_classes"][pred_idx]
     confidence = float(probs[pred_idx])
 
-    # early-fault sigmoid
     ef_prob = float(1 / (1 + np.exp(-ef_logit[0][0])))
     is_early = ef_prob > 0.5
 
@@ -239,11 +237,9 @@ def predict(session, features: np.ndarray, meta: dict) -> dict:
     }
 
 
-# ─── session state init for feature values ─────────────────────────────────
-# Use widget keys directly as the source of truth.
-# Initialize them once so both number_input and slider start in sync.
+# ---- session state init for feature values --------------------------------
 
-for _feat in FEATURE_COLS:
+for _feat in VIBRATION_FEATURE_COLS:
     _default = FEATURE_DESCRIPTIONS[_feat][3]
     if f"num_{_feat}" not in st.session_state:
         st.session_state[f"num_{_feat}"] = _default
@@ -252,20 +248,16 @@ for _feat in FEATURE_COLS:
 
 
 def _sync_from_number(feat_key):
-    """Callback: when number_input changes, push value into the slider key."""
     val = st.session_state[f"num_{feat_key}"]
     desc, s_min, s_max, _, _ = FEATURE_DESCRIPTIONS[feat_key]
-    # clamp for the slider (slider has range limits), but keep number unrestricted
     st.session_state[f"slider_{feat_key}"] = float(np.clip(val, s_min, s_max))
 
 
 def _sync_from_slider(feat_key):
-    """Callback: when slider changes, push value into the number_input key."""
     st.session_state[f"num_{feat_key}"] = st.session_state[f"slider_{feat_key}"]
 
 
 def randomize_features():
-    """Randomize all feature values — sets BOTH widget keys directly."""
     rng = np.random.default_rng()
     random_ranges = {
         "rms":                (0.1,  4.0),
@@ -284,7 +276,7 @@ def randomize_features():
         "band_energy_1_5kHz": (100.0, 80000.0),
         "snr_estimated":      (-5.0,  40.0),
     }
-    for feat in FEATURE_COLS:
+    for feat in VIBRATION_FEATURE_COLS:
         lo, hi = random_ranges[feat]
         val = round(float(rng.uniform(lo, hi)), 4)
         st.session_state[f"num_{feat}"] = val
@@ -292,16 +284,16 @@ def randomize_features():
         st.session_state[f"slider_{feat}"] = float(np.clip(val, s_min, s_max))
 
 
-# ─── sidebar ───────────────────────────────────────────────────────────────
+# ---- sidebar --------------------------------------------------------------
 
 with st.sidebar:
-    st.markdown("### ⚙️ Configuration")
+    st.markdown("### Configuration")
     st.markdown("---")
 
     mode = st.radio("Input Mode", ["Manual Input", "CSV Upload"], index=0)
 
     st.markdown("---")
-    st.markdown("### 📧 Email Settings")
+    st.markdown("### Email Settings")
     email_enabled = st.toggle("Enable Email Alerts", value=False)
     if email_enabled:
         smtp_server = st.text_input("SMTP Server", "smtp.gmail.com")
@@ -310,29 +302,27 @@ with st.sidebar:
         email_pass = st.text_input("Password", type="password")
         recipients = st.text_area("Recipients (one per line)", "maintainer@example.com")
         from_addr = st.text_input("From Address", "predictive.maintenance@caterpillar.com")
+        st.caption(
+            "For Gmail, use an App Password: "
+            "https://myaccount.google.com/apppasswords"
+        )
 
     st.markdown("---")
-    st.markdown("### 🏭 Machine Context")
-    machine_id = st.selectbox("Machine ID", [
-        "CAT-EX-001", "CAT-EX-002", "CAT-TB-001", "CAT-TB-002", "CAT-DZ-001",
-    ])
-    sensor_loc = st.selectbox("Sensor Location", [
-        "bearing_left", "bearing_right", "gearbox",
-        "turbine_blade", "shaft_coupling", "motor_housing",
-    ])
+    st.markdown("### Machine Context")
+    machine_id = st.selectbox("Machine ID", MACHINE_IDS)
 
 
-# ─── header ─────────────────────────────────────────────────────────────────
+# ---- header ---------------------------------------------------------------
 
 st.markdown("""
 <div class="hero-card">
-    <h1>⚙️ Caterpillar Predictive Maintenance</h1>
+    <h1>Caterpillar Predictive Maintenance</h1>
     <p>CNN-LSTM Deep Learning Model &bull; Real-Time Fault Detection &bull; Automated Alerts</p>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ─── main content ──────────────────────────────────────────────────────────
+# ---- main content ---------------------------------------------------------
 
 session = load_onnx_session()
 meta = load_metadata()
@@ -349,34 +339,32 @@ if session is None or meta is None:
     st.stop()
 
 
-# ── Manual Input Mode ──
+# -- Manual Input Mode --
 
 if mode == "Manual Input":
-    st.markdown('<div class="section-header">📊 Enter Vibration Features</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Provide the 15 engineered features from the vibration sensor reading. Use the sliders or type any value directly.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Enter Vibration Features</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Provide the 15 engineered features from the vibration sensor reading. The selected Machine ID is automatically encoded and fed to the model.</div>', unsafe_allow_html=True)
 
-    # ── Randomize button ──
+    # Randomize button
     col_rand, col_spacer = st.columns([1, 3])
     with col_rand:
-        if st.button("🎲 Randomize All Inputs", use_container_width=True, key="randomize_btn"):
+        if st.button("Randomize All Inputs", use_container_width=True, key="randomize_btn"):
             randomize_features()
             st.rerun()
 
     st.markdown("")
 
-    # ── Feature input grid: 3 columns ──
+    # Feature input grid: 3 columns
     cols = st.columns(3)
-    for i, feat in enumerate(FEATURE_COLS):
+    for i, feat in enumerate(VIBRATION_FEATURE_COLS):
         desc, slider_min, slider_max, default, step_val = FEATURE_DESCRIPTIONS[feat]
 
         with cols[i % 3]:
             st.markdown(f'<div class="feature-card"><div class="feat-label">{desc}</div></div>', unsafe_allow_html=True)
 
-            # number input — NO min/max range barrier
-            # The key IS the source of truth; Streamlit reads the value from session_state[key]
             st.number_input(
                 desc,
-                value=float(default),  # only used on very first render
+                value=float(default),
                 step=step_val,
                 format="%.4f",
                 key=f"num_{feat}",
@@ -385,12 +373,11 @@ if mode == "Manual Input":
                 label_visibility="collapsed",
             )
 
-            # slider below — synced bidirectionally
             st.slider(
                 f"{desc} slider",
                 min_value=float(slider_min),
                 max_value=float(slider_max),
-                value=float(default),  # only used on very first render
+                value=float(default),
                 step=step_val,
                 key=f"slider_{feat}",
                 on_change=_sync_from_slider,
@@ -400,13 +387,15 @@ if mode == "Manual Input":
 
     st.markdown("---")
 
-    if st.button("🔍 Run Prediction", use_container_width=True):
-        # read values from the number_input widget keys (unrestricted source of truth)
-        features = np.array([st.session_state[f"num_{f}"] for f in FEATURE_COLS], dtype=np.float32)
+    if st.button("Run Prediction", use_container_width=True):
+        # build 16-feature vector: 15 vibration + machine_id_encoded
+        vib_features = [st.session_state[f"num_{f}"] for f in VIBRATION_FEATURE_COLS]
+        machine_encoded = float(MACHINE_ID_MAP[machine_id])
+        features = np.array(vib_features + [machine_encoded], dtype=np.float32)
         result = predict(session, features, meta)
 
-        # ── results display ──
-        st.markdown('<div class="section-header">🎯 Prediction Results</div>', unsafe_allow_html=True)
+        # -- results display --
+        st.markdown('<div class="section-header">Prediction Results</div>', unsafe_allow_html=True)
 
         r1, r2, r3, r4 = st.columns(4)
         with r1:
@@ -445,11 +434,11 @@ if mode == "Manual Input":
             st.markdown(f"""
             <div class="metric-card">
                 <div class="label">Machine</div>
-                <div class="value" style="font-size: 16px;">{machine_id}<br/><span style="font-size: 12px; color: #6b7280;">{sensor_loc.replace('_',' ').title()}</span></div>
+                <div class="value" style="font-size: 18px;">{machine_id}</div>
             </div>
             """, unsafe_allow_html=True)
 
-        # ── confidence gauge ──
+        # Confidence gauge
         st.markdown("#### Confidence Gauge")
         fig_gauge = go.Figure(go.Indicator(
             mode="gauge+number",
@@ -481,7 +470,7 @@ if mode == "Manual Input":
         )
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-        # ── class probabilities bar chart ──
+        # Class probabilities
         st.markdown("#### Class Probability Distribution")
         prob_df = pd.DataFrame(
             list(result["probabilities"].items()),
@@ -505,14 +494,24 @@ if mode == "Manual Input":
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
-        # ── email alert ──
+        # Email alert section
         if result["fault_class"] != "normal":
             st.markdown("---")
-            st.markdown("### 📧 Send Maintenance Alert")
+            st.markdown("### Send Maintenance Alert")
+
+            # Preview email
+            from src.notifier import preview_email, send_alert
+            email_html = preview_email(
+                fault_class=result["fault_class"],
+                confidence=result["confidence"],
+                severity=result["early_fault_probability"],
+                machine_id=machine_id,
+            )
+            with st.expander("Preview Email Content"):
+                st.components.v1.html(email_html, height=450, scrolling=True)
 
             if email_enabled:
-                if st.button("📨 Send Alert Email Now", use_container_width=True):
-                    from src.notifier import send_alert
+                if st.button("Send Alert Email Now", use_container_width=True):
                     email_cfg = {
                         "smtp_server": smtp_server,
                         "smtp_port": smtp_port,
@@ -523,27 +522,26 @@ if mode == "Manual Input":
                         "recipients": [r.strip() for r in recipients.strip().split("\n") if r.strip()],
                         "subject_prefix": "[FAULT ALERT]",
                     }
-                    success = send_alert(
+                    success, message = send_alert(
                         fault_class=result["fault_class"],
                         confidence=result["confidence"],
                         severity=result["early_fault_probability"],
                         machine_id=machine_id,
-                        sensor_location=sensor_loc,
                         email_cfg=email_cfg,
                     )
                     if success:
-                        st.success("Alert email sent successfully!")
+                        st.success(message)
                     else:
-                        st.error("Failed to send email. Check your SMTP settings.")
+                        st.error(message)
             else:
                 st.info("Enable Email Alerts in the sidebar to send notifications.")
 
 
-# ── CSV Upload Mode ──
+# -- CSV Upload Mode --
 
 elif mode == "CSV Upload":
-    st.markdown('<div class="section-header">📁 Upload Sensor Data CSV</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Upload a CSV file with the 15 vibration feature columns for batch prediction.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Upload Sensor Data CSV</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Upload a CSV with the 15 vibration feature columns + machine_id (or machine_id_encoded) for batch prediction.</div>', unsafe_allow_html=True)
 
     uploaded = st.file_uploader("Choose a CSV file", type=["csv"])
 
@@ -551,28 +549,35 @@ elif mode == "CSV Upload":
         df = pd.read_csv(uploaded)
         st.markdown(f"**Rows loaded:** {len(df)}")
 
-        # check columns
-        missing = [c for c in FEATURE_COLS if c not in df.columns]
+        # check vibration columns
+        missing = [c for c in VIBRATION_FEATURE_COLS if c not in df.columns]
         if missing:
             st.error(f"Missing columns: {missing}")
             st.stop()
 
+        # handle machine_id encoding
+        if "machine_id_encoded" not in df.columns:
+            if "machine_id" in df.columns:
+                df["machine_id_encoded"] = df["machine_id"].map(MACHINE_ID_MAP).fillna(0).astype(int)
+            else:
+                st.warning("No machine_id column found. Using default (0).")
+                df["machine_id_encoded"] = 0
+
         st.dataframe(df.head(10), use_container_width=True)
 
-        if st.button("🔍 Run Batch Prediction", use_container_width=True):
+        if st.button("Run Batch Prediction", use_container_width=True):
             results = []
             progress = st.progress(0)
             for i, row in df.iterrows():
-                features = np.array([row[f] for f in FEATURE_COLS], dtype=np.float32)
+                features = np.array([row[f] for f in ALL_FEATURE_COLS], dtype=np.float32)
                 res = predict(session, features, meta)
                 res["row_index"] = i
                 results.append(res)
                 progress.progress((i + 1) / len(df))
 
             res_df = pd.DataFrame(results)
-            st.markdown("### 📊 Batch Results")
+            st.markdown("### Batch Results")
 
-            # summary metrics
             c1, c2, c3 = st.columns(3)
             fault_count = (res_df["fault_class"] != "normal").sum()
             early_count = res_df["is_early_fault"].sum()
@@ -583,7 +588,6 @@ elif mode == "CSV Upload":
             with c3:
                 st.metric("Early-Stage Faults", int(early_count))
 
-            # distribution pie
             class_counts = res_df["fault_class"].value_counts()
             fig_pie = px.pie(
                 values=class_counts.values,
@@ -599,18 +603,15 @@ elif mode == "CSV Upload":
             )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-            # results table
             display_df = res_df[["row_index", "fault_class", "confidence", "early_fault_probability", "is_early_fault"]]
             st.dataframe(display_df, use_container_width=True)
 
-            # download
             csv = display_df.to_csv(index=False)
             st.download_button("Download Results CSV", csv, "predictions.csv", "text/csv")
 
-            # email alert for faults
             if fault_count > 0 and email_enabled:
                 st.markdown("---")
-                if st.button("📨 Send Batch Alert Email", use_container_width=True):
+                if st.button("Send Batch Alert Email", use_container_width=True):
                     from src.notifier import send_alert
                     email_cfg = {
                         "smtp_server": smtp_server,
@@ -622,20 +623,21 @@ elif mode == "CSV Upload":
                         "recipients": [r.strip() for r in recipients.strip().split("\n") if r.strip()],
                         "subject_prefix": "[FAULT ALERT - BATCH]",
                     }
-                    # send one alert for the most severe fault
                     worst = res_df.loc[res_df["confidence"].idxmax()]
-                    send_alert(
+                    success, message = send_alert(
                         fault_class=worst["fault_class"],
                         confidence=worst["confidence"],
                         severity=worst["early_fault_probability"],
                         machine_id=machine_id,
-                        sensor_location=sensor_loc,
                         email_cfg=email_cfg,
                     )
-                    st.success(f"Alert sent for {int(fault_count)} detected faults.")
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
 
 
-# ─── footer ─────────────────────────────────────────────────────────────────
+# ---- footer ---------------------------------------------------------------
 
 st.markdown("---")
 st.markdown(

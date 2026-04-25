@@ -32,7 +32,7 @@ def export_to_onnx(cfg: dict):
     model.eval()
 
     # dummy input
-    dummy = torch.randn(1, 15)
+    dummy = torch.randn(1, 16)
 
     # export
     os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
@@ -56,13 +56,13 @@ def export_to_onnx(cfg: dict):
     import onnx
     onnx_model = onnx.load(onnx_path)
     onnx.checker.check_model(onnx_model)
-    print("ONNX model verification passed ✓")
+    print("ONNX model verification passed [OK]")
 
     # quick inference test
     import onnxruntime as ort
     import numpy as np
     session = ort.InferenceSession(onnx_path)
-    test_input = np.random.randn(1, 15).astype(np.float32)
+    test_input = np.random.randn(1, 16).astype(np.float32)
     outputs = session.run(None, {"features": test_input})
     print(f"Test inference — class logits shape: {outputs[0].shape}, early-fault shape: {outputs[1].shape}")
 

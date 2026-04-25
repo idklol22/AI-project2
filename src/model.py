@@ -2,15 +2,16 @@
 CNN-LSTM Hybrid Model for Vibration-Based Fault Detection
 ==========================================================
 Architecture:
-  - 1D CNN feature extractor (3 conv blocks) operating on the 15 engineered features
-    reshaped as a 1-channel 1D sequence.
+  - 1D CNN feature extractor (3 conv blocks) operating on the 16 input features
+    (15 engineered vibration features + machine_id_encoded) reshaped as a
+    1-channel 1D sequence.
   - Bidirectional LSTM for temporal-pattern modelling.
   - Dual-head output:
-      • Classification head → 8 fault classes (softmax)
-      • Early-fault head → binary (sigmoid)
+      - Classification head -> 8 fault classes (softmax)
+      - Early-fault head -> binary (sigmoid)
 
-The model accepts a tensor of shape (batch, 15) — the 15 engineered vibration
-features — and produces class logits + early-fault probability.
+The model accepts a tensor of shape (batch, 16) — 15 vibration features +
+machine_id_encoded — and produces class logits + early-fault probability.
 """
 
 import torch
@@ -37,13 +38,13 @@ class FaultDetectorCNNLSTM(nn.Module):
     """
     Hybrid CNN-LSTM for fault classification + early-fault detection.
 
-    Input:  (batch, num_features)   — e.g. (B, 15)
+    Input:  (batch, num_features)   -- e.g. (B, 16)
     Output: (class_logits (B, C), early_fault_prob (B, 1))
     """
 
     def __init__(
         self,
-        num_features: int = 15,
+        num_features: int = 16,
         cnn_channels: list[int] = None,
         cnn_kernel_sizes: list[int] = None,
         lstm_hidden: int = 128,
@@ -124,7 +125,7 @@ def build_model(cfg: dict) -> FaultDetectorCNNLSTM:
     """Build model from config dict."""
     mcfg = cfg["model"]
     return FaultDetectorCNNLSTM(
-        num_features=15,
+        num_features=mcfg.get("num_features", 16),
         cnn_channels=mcfg["cnn_channels"],
         cnn_kernel_sizes=mcfg["cnn_kernel_sizes"],
         lstm_hidden=mcfg["lstm_hidden"],
@@ -137,8 +138,8 @@ def build_model(cfg: dict) -> FaultDetectorCNNLSTM:
 
 if __name__ == "__main__":
     # quick sanity check
-    model = FaultDetectorCNNLSTM()
-    dummy = torch.randn(4, 15)
+    model = FaultDetectorCNNLSTM(num_features=16)
+    dummy = torch.randn(4, 16)
     cls_out, ef_out = model(dummy)
     print(f"Class logits shape : {cls_out.shape}")   # (4, 8)
     print(f"Early-fault shape  : {ef_out.shape}")     # (4, 1)

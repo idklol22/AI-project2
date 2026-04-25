@@ -35,6 +35,7 @@ FEATURE_COLS = [
     "spectral_centroid", "spectral_bandwidth", "spectral_rolloff",
     "dominant_frequency", "frequency_rms", "entropy", "impulse_factor",
     "clearance_factor", "band_energy_1_5kHz", "snr_estimated",
+    "machine_id_encoded",
 ]
 
 

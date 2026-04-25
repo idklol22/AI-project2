@@ -3,8 +3,8 @@ Synthetic Vibration Dataset Generator
 =====================================
 Generates realistic high-frequency vibration sensor data for heavy machinery
 (turbines, excavators, dozers). Each sample is a raw time-domain signal from
-which 15 engineered features are extracted. The final output is a single CSV
-with metadata, features, and detailed fault labels.
+which 15 engineered features are extracted, plus machine_id encoded numerically.
+The final output is a single CSV with metadata, features, and detailed fault labels.
 
 Fault Classes (8):
   normal, imbalance_early, imbalance_severe, misalignment_early,
@@ -27,39 +27,61 @@ def load_config(path: str = "config/config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+# Fixed machine ID → integer mapping (shared across the project)
+MACHINE_ID_MAP = {
+    "CAT-EX-001": 0,
+    "CAT-EX-002": 1,
+    "CAT-TB-001": 2,
+    "CAT-TB-002": 3,
+    "CAT-DZ-001": 4,
+}
+
+# Per-machine base characteristics (to make machine_id meaningful)
+# (base_rpm_offset, base_noise_offset, base_amplitude_scale)
+MACHINE_PROFILES = {
+    "CAT-EX-001": (0.0,   0.0, 1.0),    # baseline excavator
+    "CAT-EX-002": (50.0, -2.0, 1.1),    # slightly noisier excavator
+    "CAT-TB-001": (-100.0, 3.0, 0.8),   # cleaner turbine
+    "CAT-TB-002": (-80.0,  1.0, 0.85),  # turbine variant
+    "CAT-DZ-001": (120.0, -4.0, 1.25),  # heavy dozer, noisier
+}
+
+
 # ─── raw signal generators ─────────────────────────────────────────────────
 
-def _base_signal(n: int, fs: int, rpm: float, rng: np.random.Generator) -> np.ndarray:
+def _base_signal(n: int, fs: int, rpm: float, amp_scale: float,
+                 rng: np.random.Generator) -> np.ndarray:
     """Healthy baseline: sum of harmonics of the shaft rotation frequency."""
-    f_rot = rpm / 60.0  # rotation frequency in Hz
+    f_rot = rpm / 60.0
     t = np.arange(n) / fs
     sig = np.zeros(n)
-    for h in range(1, 5):
-        amp = rng.uniform(0.3, 1.0) / h
+    # more harmonics for richer signals
+    for h in range(1, 7):
+        amp = amp_scale * rng.uniform(0.2, 1.0) / h
         phase = rng.uniform(0, 2 * np.pi)
         sig += amp * np.sin(2 * np.pi * h * f_rot * t + phase)
-    # small broadband component
-    sig += 0.05 * rng.normal(size=n)
+    # broadband vibration floor
+    sig += 0.04 * amp_scale * rng.normal(size=n)
     return sig
 
 
 def _inject_imbalance(sig: np.ndarray, fs: int, rpm: float, severity: float,
                       rng: np.random.Generator) -> np.ndarray:
-    """Add a strong 1× rotational frequency component."""
+    """Add a strong 1x rotational frequency component."""
     t = np.arange(len(sig)) / fs
     f_rot = rpm / 60.0
-    amp = severity * rng.uniform(1.5, 3.0)
+    amp = severity * rng.uniform(1.5, 3.5)
     sig += amp * np.sin(2 * np.pi * f_rot * t + rng.uniform(0, 2 * np.pi))
     return sig
 
 
 def _inject_misalignment(sig: np.ndarray, fs: int, rpm: float, severity: float,
                           rng: np.random.Generator) -> np.ndarray:
-    """Add 2× and 3× harmonics (axial vibration pattern)."""
+    """Add 2x and 3x harmonics (axial vibration pattern)."""
     t = np.arange(len(sig)) / fs
     f_rot = rpm / 60.0
-    for h in [2, 3]:
-        amp = severity * rng.uniform(1.0, 2.5) / h
+    for h in [2, 3, 4]:
+        amp = severity * rng.uniform(0.8, 2.8) / h
         sig += amp * np.sin(2 * np.pi * h * f_rot * t + rng.uniform(0, 2 * np.pi))
     return sig
 
@@ -69,23 +91,21 @@ def _inject_bearing_wear(sig: np.ndarray, fs: int, rpm: float, severity: float,
     """Add high-frequency periodic bursts (simulating roller-element defects)."""
     n = len(sig)
     t = np.arange(n) / fs
-    # Bearing defect frequency ≈ 3–8× shaft speed
     f_def = rng.uniform(3, 8) * (rpm / 60.0)
     burst_env = 0.5 * (1 + np.sin(2 * np.pi * f_def * t))
-    hf_carrier = rng.uniform(2000, 4500)  # Hz
-    burst = severity * rng.uniform(1.0, 2.0) * burst_env * np.sin(2 * np.pi * hf_carrier * t)
+    hf_carrier = rng.uniform(1800, 4800)
+    burst = severity * rng.uniform(1.0, 2.5) * burst_env * np.sin(2 * np.pi * hf_carrier * t)
     sig += burst
     return sig
 
 
 def _add_noise(sig: np.ndarray, snr_db: float, rng: np.random.Generator) -> np.ndarray:
     """Add Gaussian white noise + occasional impulse noise."""
-    # white noise
     power_sig = np.mean(sig ** 2)
     power_noise = power_sig / (10 ** (snr_db / 10))
     noise = rng.normal(0, np.sqrt(power_noise), size=len(sig))
     # impulse noise (sparse)
-    impulse_mask = rng.random(size=len(sig)) < 0.001
+    impulse_mask = rng.random(size=len(sig)) < 0.002
     impulse = impulse_mask * rng.normal(0, np.sqrt(power_sig) * 3, size=len(sig))
     return sig + noise + impulse
 
@@ -124,7 +144,7 @@ def extract_features(sig: np.ndarray, fs: int) -> dict:
     sig_hist = sig_hist[sig_hist > 0]
     ent = float(sp_entropy(sig_hist))
 
-    # band energy (1 kHz – 5 kHz)
+    # band energy (1 kHz - 5 kHz)
     band_mask = (freqs >= 1000) & (freqs <= 5000)
     band_energy = float(np.sum(mag[band_mask] ** 2))
 
@@ -165,8 +185,8 @@ FAULT_CLASSES = [
     "combined_fault",
 ]
 
-# class weights for balanced generation
-CLASS_WEIGHTS = [0.20, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.20]
+# class weights: 30% normal, rest balanced across 7 fault types
+CLASS_WEIGHTS = [0.30, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10]
 
 
 def generate_single_sample(
@@ -175,41 +195,42 @@ def generate_single_sample(
     fs: int,
     rpm: float,
     snr_db: float,
+    amp_scale: float,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, float, bool]:
     """Generate a single raw signal with injected fault. Returns (signal, severity, is_early)."""
-    sig = _base_signal(n, fs, rpm, rng)
+    sig = _base_signal(n, fs, rpm, amp_scale, rng)
     severity = 0.0
     is_early = False
 
     if fault_class == "normal":
         severity = 0.0
     elif fault_class == "imbalance_early":
-        severity = rng.uniform(0.1, 0.35)
+        severity = rng.uniform(0.08, 0.35)
         is_early = True
         sig = _inject_imbalance(sig, fs, rpm, severity, rng)
     elif fault_class == "imbalance_severe":
-        severity = rng.uniform(0.6, 1.0)
+        severity = rng.uniform(0.55, 1.0)
         sig = _inject_imbalance(sig, fs, rpm, severity, rng)
     elif fault_class == "misalignment_early":
-        severity = rng.uniform(0.1, 0.35)
+        severity = rng.uniform(0.08, 0.35)
         is_early = True
         sig = _inject_misalignment(sig, fs, rpm, severity, rng)
     elif fault_class == "misalignment_severe":
-        severity = rng.uniform(0.6, 1.0)
+        severity = rng.uniform(0.55, 1.0)
         sig = _inject_misalignment(sig, fs, rpm, severity, rng)
     elif fault_class == "bearing_wear_early":
-        severity = rng.uniform(0.1, 0.35)
+        severity = rng.uniform(0.08, 0.35)
         is_early = True
         sig = _inject_bearing_wear(sig, fs, rpm, severity, rng)
     elif fault_class == "bearing_wear_severe":
-        severity = rng.uniform(0.6, 1.0)
+        severity = rng.uniform(0.55, 1.0)
         sig = _inject_bearing_wear(sig, fs, rpm, severity, rng)
     elif fault_class == "combined_fault":
-        severity = rng.uniform(0.4, 1.0)
-        sig = _inject_imbalance(sig, fs, rpm, severity * rng.uniform(0.5, 1.0), rng)
-        sig = _inject_misalignment(sig, fs, rpm, severity * rng.uniform(0.5, 1.0), rng)
-        sig = _inject_bearing_wear(sig, fs, rpm, severity * rng.uniform(0.3, 0.8), rng)
+        severity = rng.uniform(0.35, 1.0)
+        sig = _inject_imbalance(sig, fs, rpm, severity * rng.uniform(0.4, 1.0), rng)
+        sig = _inject_misalignment(sig, fs, rpm, severity * rng.uniform(0.4, 1.0), rng)
+        sig = _inject_bearing_wear(sig, fs, rpm, severity * rng.uniform(0.25, 0.85), rng)
 
     sig = _add_noise(sig, snr_db, rng)
     return sig, severity, is_early
@@ -223,7 +244,6 @@ def generate_dataset(cfg: dict) -> pd.DataFrame:
     fs = data_cfg["sampling_rate"]
     snr_lo, snr_hi = data_cfg["snr_range"]
     machines = data_cfg["machines"]
-    locations = data_cfg["sensor_locations"]
     seed = data_cfg["random_seed"]
 
     rng = np.random.default_rng(seed)
@@ -239,20 +259,30 @@ def generate_dataset(cfg: dict) -> pd.DataFrame:
     print(f"Generating {n_samples} samples ...")
     for i in range(n_samples):
         fault_class = FAULT_CLASSES[class_indices[i]]
-        rpm = rng.uniform(500, 3000)
+
+        # pick a machine and use its profile to influence signals
+        machine = rng.choice(machines)
+        rpm_offset, noise_offset, amp_scale = MACHINE_PROFILES[machine]
+        machine_encoded = MACHINE_ID_MAP[machine]
+
+        # operating conditions (influenced by machine type)
+        rpm = rng.uniform(500, 3000) + rpm_offset
+        rpm = max(200, rpm)  # floor
         load = rng.uniform(20, 100)
         temp = rng.uniform(40, 120)
-        snr_db = rng.uniform(snr_lo, snr_hi)
-        machine = rng.choice(machines)
-        location = rng.choice(locations)
+        snr_db = rng.uniform(snr_lo, snr_hi) + noise_offset
+        snr_db = max(2, snr_db)  # floor
+
         ts = base_time + timedelta(minutes=int(i * rng.uniform(1, 15)))
 
-        sig, severity, is_early = generate_single_sample(fault_class, n, fs, rpm, snr_db, rng)
+        sig, severity, is_early = generate_single_sample(
+            fault_class, n, fs, rpm, snr_db, amp_scale, rng
+        )
         feats = extract_features(sig, fs)
 
         row = {
             "machine_id": machine,
-            "sensor_location": location,
+            "machine_id_encoded": machine_encoded,
             "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
             "operating_speed_rpm": round(rpm, 1),
             "load_percentage": round(load, 1),
@@ -285,7 +315,9 @@ def main():
     print("\nClass distribution:")
     print(df["fault_class"].value_counts().to_string())
     print(f"\nEarly-fault samples: {df['is_early_fault'].sum()}")
-    print(f"Feature columns: {list(df.columns)}")
+    print(f"Normal samples: {(df['fault_class'] == 'normal').sum()}")
+    print(f"Machine distribution:\n{df['machine_id'].value_counts().to_string()}")
+    print(f"\nFeature columns: {list(df.columns)}")
 
 
 if __name__ == "__main__":
