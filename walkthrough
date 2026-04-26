@@ -1,0 +1,80 @@
+# Predictive Maintenance System Report
+
+> [!NOTE]
+> This document serves as a comprehensive, end-to-end technical report covering our Predictive Maintenance AI suite. It details the data sources, preprocessing methodology, neural network topology, and the interactive diagnostic frontend.
+
+## 1. Project Overview
+The goal of this project is to intelligently monitor industrial machinery operating specifications—such as operating speeds, physical loads, thermals, and mechanical vibration dynamics—to predict hardware failures before they result in critical downtimes. 
+
+Rather than relying purely on deterministic thresholds, we implement a **deep time-series learning approach** that detects early and severe anomalies utilizing a hierarchical structure (detecting *if* an anomaly exists first, before mathematically determining *which* component is failing).
+
+## 2. Dataset Generation & Pre-Processing
+The core vibration logs, environmental metrics, and mechanical parameters were synthetically structured to align with an industry-standard dataset originally sourced from **Kaggle**.
+
+### Technical Input Pipeline
+The system utilizes **19 distinct continuous features**, including but not limited to:
+- **Mechanical Readings**: `operating_speed_rpm`, `load_percentage`, `temperature_celsius`
+- **Time-Domain Dynamics**: `rms` (Root Mean Square), `peak_to_peak`, `kurtosis`, `skewness`, `crest_factor`, `impulse_factor`, `clearance_factor`
+- **Frequency-Domain / Spectral Measurements**: `spectral_centroid`, `spectral_bandwidth`, `spectral_rolloff`, `dominant_frequency`, `frequency_rms`
+- **Statistical / Energy Bounds**: `entropy`, `band_energy_1_5kHz`, `snr_estimated`
+
+*Data Transformation*: Time-series windows are created natively using sequences of $L=24$ time-steps (via rolling windows with `stride=1`). The final input is $24 \times 19$ for each sample passed to the network after standardization through an SKLearn `StandardScaler` to force inputs to uniform scales.
+
+---
+
+## 3. Neural Architecture: The Hierarchical CNN-LSTM
+
+The core model is engineered to capture both localized high-frequency spatial anomalies and long-term degradation trend dependencies. The architecture fuses **1D Convolutional blocks** with **Bidirectional LSTMs**, splitting into two distinct predictive heads.
+
+### A. The CNN Feature Extraction Block
+The signal sequence $[B, 24, 19]$ is processed to understand immediate, sudden anomalies (such as impact pulses or short-duration friction spikes).
+1. **Layer 1**: `Conv1d` (Input: 19 | Output: 64 | Kernel: 3 | Padding: 1)
+2. **Activation**: `BatchNorm1d` + `GELU` 
+3. **Layer 2**: `Conv1d` (Input: 64 | Output: 96 | Kernel: 5 | Padding: 2) -> Broadened receptive field to capture structural resonances.
+4. **Activation & Regularization**: `BatchNorm1d` + `GELU` + `Dropout(p=0.20)`
+
+### B. The Bi-LSTM Temporal Block
+The output from the CNN ($[B, 24, 96]$) acts as feature embeddings fed sequentially into an LSTM to analyze degradation patterns over the 24-step horizon. 
+- **Type**: Bidirectional LSTM
+- **Hidden Dim**: `96` (Results in a concatenated forward/backward dimension of `192` per step).
+- **Aggregation**: The network combines both the **mean-pooled output** (covering the general trend of the window) and the **last sequence step** (the most recent mechanical state), creating a highly robust $384$-dimension feature matrix.
+
+### C. Hierarchical Output Heads
+The model prevents conflicting loss gradients by separating logic via Multi-Task Learning.
+1. **Binary Anomaly Head**: Designed strictly to categorize structural integrity. Passes the $384$-dim vector through a `Linear(128) -> GELU -> Dropout -> Linear(1)` classification mapping to calculate global fault likelihood.
+2. **Multi-Class Defect Head**: Only heavily penalized via loss when a fault actually exists. Maps the representation through identical topologies to $7$ specific labels (`imbalance_early`, `bearing_wear_severe`, `misalignment_early`, etc.). 
+
+> [!TIP]
+> The threshold for the Binary head isn't strictly locked to `0.5`; it is automatically optimized to maximize the $F1$ score during the evaluation phases, allowing dynamic sensitivity to real-world deployment data!
+
+---
+
+## 4. Hyperparameters & Training Specifications
+
+The model trains under aggressive optimization techniques using **PyTorch**, applying custom loss weightings to compensate for extreme dataset balancing imbalances.
+
+* **Epochs**: $40$
+* **Batch Size**: $256$
+* **Optimizer**: `AdamW`
+  * **Learning Rate**: $0.001$ ($1e-3$)
+  * **Weight Decay**: $0.0001$ ($1e-4$)
+* **Sequence Length (seq_len)**: $24$ Time-Steps
+* **Regularization (Dropout)**: $20\%$ ($0.20$)
+* **Scheduler**: `ReduceLROnPlateau` (Halves the LR if the combined metric score plateaus to aggressively hone in on local minima).
+* **Cross-Entropy Label Smoothing**: $0.05$ (Prevents the model from becoming over-confident on difficult threshold classifications).
+* **Loss Functions**: `BCEWithLogitsLoss` for the detector, combined with globally re-weighted `CrossEntropyLoss` for class identification ($Loss = Loss_{bin} + 1.0 \times Loss_{multi}$).
+
+---
+
+## 5. Implementation Layout: The Frontend Dashboard
+
+To integrate the predictive framework with operational maintainers, a sophisticated **Streamlit** dashboard was developed, featuring immediate data telemetry, live UI interpretation, and actionable protocols.
+
+* **Live Data Constraint Modeling**: The application evaluates realistic constraints extracted from the dataset properties to prevent mechanically impossible inferences (e.g. testing components across bounded constraints between real limits limits like `2,800` RPMs or `150` Celsius max).
+* **Inference Pipeline**: The interactive sliders translate feature inputs into batched shapes $( $[1, 24, 19]$ )$, apply the dynamically serialized scaling pipeline, and run the `PyTorch` model natively in memory using zero-grad optimizations.
+* **Plotly Visuals**: 
+    - **Gauge Matrix**: Shows absolute Anomaly Confidence measured directly against the optimized baseline threshold.
+    - **Classification Charts**: Replaces raw tensors with highly readable horizontal probability distributions.
+* **Automated SMTP Feedback Loop**: 
+    - When structural stability goes beyond functional constraints, the dashboard unlocks an **Automated Alert Dispatch** portal.
+    - It allows automated TLS/SMTP mail routing using secure Gmail configurations, formatting contextual warning data directly (including pinpointing the Highest Suspect Parameter) straight to organizational maintenance lists (`wadhwasanjam@gmail.com`).

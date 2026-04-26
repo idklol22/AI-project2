@@ -1,0 +1,10 @@
+{
+  "val_binary_f1": 0.9508420573509331,
+  "val_fault_macro_f1": 0.9072495071724848,
+  "val_full_macro_f1": 0.8966800103589323,
+  "test_binary_f1": 0.9290596276219656,
+  "test_fault_macro_f1": 0.8756010777670886,
+  "test_full_macro_f1": 0.8685416018730232,
+  "threshold": 0.6500000000000001,
+  "seq_len": 24
+}

@@ -1,649 +1,277 @@
-"""
-Streamlit Frontend -- Predictive Maintenance Dashboard
-======================================================
-A premium, light-themed dashboard that provides:
-  1. Manual feature input form (15 vibration features + machine_id)
-  2. Sliders below each input for quick adjustment
-  3. Randomize button to populate all fields with random values
-  4. CSV batch upload for bulk predictions
-  5. ONNX model inference with real-time results
-  6. Confidence gauges, severity indicators, and fault distribution charts
-  7. Email alert configuration with preview and one-click sending
-"""
-
-import os
-import json
+import streamlit as st
+import torch
 import numpy as np
 import pandas as pd
-import streamlit as st
+import joblib
 import plotly.graph_objects as go
 import plotly.express as px
-import onnxruntime as ort
-from datetime import datetime
+import os
+import smtplib
+import urllib.parse
 
-# ---- page config ----------------------------------------------------------
-
-st.set_page_config(
-    page_title="Caterpillar Predictive Maintenance",
-    page_icon="",
-    layout="wide",
-    initial_sidebar_state="expanded",
+from src.models import (
+    load_model, 
+    FEATURE_COLS, 
+    FAULT_LABELS, 
+    ALL_LABELS
 )
 
-# ---- custom CSS -- LIGHT THEME --------------------------------------------
+# Constants
+MODEL_DIR = "artifacts_hierarchical"
+MODEL_PATH = os.path.join(MODEL_DIR, "hierarchical_cnn_lstm.pt")
+SCALER_PATH = os.path.join(MODEL_DIR, "scaler.joblib")
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
-}
-.stApp {
-    background: linear-gradient(180deg, #f8f9fc 0%, #eef1f8 50%, #f0f2f8 100%);
-}
-
-.hero-card {
-    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #6366f1 100%);
-    border: none;
-    border-radius: 16px;
-    padding: 32px 40px;
-    margin-bottom: 24px;
-    box-shadow: 0 8px 32px rgba(79, 70, 229, 0.25);
-}
-.hero-card h1 {
-    color: #fff;
-    font-size: 28px;
-    font-weight: 800;
-    margin: 0;
-    letter-spacing: -0.5px;
-}
-.hero-card p {
-    color: rgba(255,255,255,0.75);
-    font-size: 14px;
-    margin: 8px 0 0 0;
-}
-
-.metric-card {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    padding: 20px 24px;
-    text-align: center;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-}
-.metric-card .label {
-    color: #6b7280;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 8px;
-}
-.metric-card .value {
-    color: #1f2937;
-    font-size: 28px;
-    font-weight: 700;
-}
-
-.badge-high { background: #ef4444; color: #fff; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
-.badge-early { background: #f59e0b; color: #1a1a2e; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
-.badge-normal { background: #10b981; color: #fff; padding: 4px 16px; border-radius: 20px; font-weight: 700; font-size: 13px; display: inline-block; }
-
-.feature-card {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 12px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
-}
-.feature-card .feat-label {
-    color: #374151;
-    font-size: 13px;
-    font-weight: 600;
-    margin-bottom: 6px;
-}
-
-section[data-testid="stSidebar"] {
-    background: #ffffff;
-    border-right: 1px solid #e5e7eb;
-}
-section[data-testid="stSidebar"] .stMarkdown h3 {
-    color: #1f2937 !important;
-}
-
-.stTextInput label, .stNumberInput label, .stSelectbox label, .stSlider label {
-    color: #374151 !important;
-    font-weight: 500 !important;
-}
-
-.stButton > button {
-    background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
-    color: #fff !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    padding: 10px 28px !important;
-    transition: all 0.3s ease !important;
-}
-.stButton > button:hover {
-    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
-    box-shadow: 0 4px 20px rgba(79, 70, 229, 0.35) !important;
-    transform: translateY(-1px) !important;
-}
-
-.section-header {
-    color: #1f2937;
-    font-size: 20px;
-    font-weight: 700;
-    margin-bottom: 8px;
-}
-.section-sub {
-    color: #6b7280;
-    font-size: 14px;
-    margin-bottom: 16px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-# ---- constants ------------------------------------------------------------
-
-MODELS_DIR = "models"
-ONNX_PATH = os.path.join(MODELS_DIR, "fault_detector.onnx")
-META_PATH = os.path.join(MODELS_DIR, "metadata.json")
-
-# Machine ID mapping (must match generate_dataset.py)
-MACHINE_ID_MAP = {
-    "CAT-EX-001": 0,
-    "CAT-EX-002": 1,
-    "CAT-TB-001": 2,
-    "CAT-TB-002": 3,
-    "CAT-DZ-001": 4,
-}
-MACHINE_IDS = list(MACHINE_ID_MAP.keys())
-
-VIBRATION_FEATURE_COLS = [
-    "rms", "peak_to_peak", "kurtosis", "skewness", "crest_factor",
-    "spectral_centroid", "spectral_bandwidth", "spectral_rolloff",
-    "dominant_frequency", "frequency_rms", "entropy", "impulse_factor",
-    "clearance_factor", "band_energy_1_5kHz", "snr_estimated",
-]
-
-# All 16 features fed to the model (15 vibration + machine_id_encoded)
-ALL_FEATURE_COLS = VIBRATION_FEATURE_COLS + ["machine_id_encoded"]
-
-# (label, slider_min, slider_max, default, step)
-FEATURE_DESCRIPTIONS = {
-    "rms":                 ("RMS Amplitude",            0.0, 10.0,    0.5,     0.01),
-    "peak_to_peak":        ("Peak-to-Peak",             0.0, 30.0,    1.5,     0.01),
-    "kurtosis":            ("Kurtosis",               -10.0, 50.0,    3.0,     0.1),
-    "skewness":            ("Skewness",               -10.0, 10.0,    0.0,     0.01),
-    "crest_factor":        ("Crest Factor",             0.0, 20.0,    3.0,     0.01),
-    "spectral_centroid":   ("Spectral Centroid (Hz)",   0.0, 10000.0, 1500.0,  1.0),
-    "spectral_bandwidth":  ("Spectral Bandwidth (Hz)",  0.0, 8000.0,  800.0,   1.0),
-    "spectral_rolloff":    ("Spectral Roll-off (Hz)",   0.0, 10000.0, 2500.0,  1.0),
-    "dominant_frequency":  ("Dominant Frequency (Hz)",  0.0, 10000.0, 500.0,   1.0),
-    "frequency_rms":       ("Frequency-Domain RMS",     0.0, 500.0,   10.0,    0.1),
-    "entropy":             ("Signal Entropy",           0.0, 10.0,    3.0,     0.01),
-    "impulse_factor":      ("Impulse Factor",           0.0, 30.0,    3.0,     0.01),
-    "clearance_factor":    ("Clearance Factor",         0.0, 50.0,    4.0,     0.01),
-    "band_energy_1_5kHz":  ("Band Energy 1-5 kHz",     0.0, 200000.0, 5000.0, 10.0),
-    "snr_estimated":       ("Estimated SNR (dB)",     -30.0, 80.0,    15.0,    0.1),
-}
-
-
-# ---- model loading --------------------------------------------------------
+st.set_page_config(page_title="Predictive Maintenance Dashboard", layout="wide")
 
 @st.cache_resource
-def load_onnx_session():
-    if not os.path.exists(ONNX_PATH):
-        return None
-    return ort.InferenceSession(ONNX_PATH)
+def load_assets():
+    if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
+        return None, None, None
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model, checkpoint = load_model(MODEL_PATH, device=device)
+    scaler = joblib.load(SCALER_PATH)
+    return model, checkpoint, scaler
 
+model, checkpoint, scaler = load_assets()
 
-@st.cache_resource
-def load_metadata():
-    if not os.path.exists(META_PATH):
-        return None
-    with open(META_PATH, "r") as f:
-        return json.load(f)
-
-
-def predict(session, features: np.ndarray, meta: dict) -> dict:
-    """Run ONNX inference on 16-feature input and return structured result."""
-    mean = np.array(meta["scaler_mean"], dtype=np.float32)
-    scale = np.array(meta["scaler_scale"], dtype=np.float32)
-    x = ((features - mean) / scale).reshape(1, -1).astype(np.float32)
-
-    cls_logits, ef_logit = session.run(None, {"features": x})
-
-    exp = np.exp(cls_logits[0] - np.max(cls_logits[0]))
-    probs = exp / exp.sum()
-
-    pred_idx = int(np.argmax(probs))
-    pred_class = meta["label_classes"][pred_idx]
-    confidence = float(probs[pred_idx])
-
-    ef_prob = float(1 / (1 + np.exp(-ef_logit[0][0])))
-    is_early = ef_prob > 0.5
-
-    return {
-        "fault_class": pred_class,
-        "confidence": confidence,
-        "probabilities": {meta["label_classes"][i]: float(probs[i]) for i in range(len(probs))},
-        "early_fault_probability": ef_prob,
-        "is_early_fault": is_early,
-    }
-
-
-# ---- session state init for feature values --------------------------------
-
-for _feat in VIBRATION_FEATURE_COLS:
-    _default = FEATURE_DESCRIPTIONS[_feat][3]
-    if f"num_{_feat}" not in st.session_state:
-        st.session_state[f"num_{_feat}"] = _default
-    if f"slider_{_feat}" not in st.session_state:
-        st.session_state[f"slider_{_feat}"] = _default
-
-
-def _sync_from_number(feat_key):
-    val = st.session_state[f"num_{feat_key}"]
-    desc, s_min, s_max, _, _ = FEATURE_DESCRIPTIONS[feat_key]
-    st.session_state[f"slider_{feat_key}"] = float(np.clip(val, s_min, s_max))
-
-
-def _sync_from_slider(feat_key):
-    st.session_state[f"num_{feat_key}"] = st.session_state[f"slider_{feat_key}"]
-
-
-def randomize_features():
-    rng = np.random.default_rng()
-    random_ranges = {
-        "rms":                (0.1,  4.0),
-        "peak_to_peak":       (0.5,  20.0),
-        "kurtosis":           (-2.0, 30.0),
-        "skewness":           (-2.0, 2.0),
-        "crest_factor":       (1.5,  8.0),
-        "spectral_centroid":  (200.0, 4500.0),
-        "spectral_bandwidth": (100.0, 3500.0),
-        "spectral_rolloff":   (500.0, 5000.0),
-        "dominant_frequency": (10.0,  5000.0),
-        "frequency_rms":      (1.0,   80.0),
-        "entropy":            (1.5,  5.0),
-        "impulse_factor":     (1.5,  12.0),
-        "clearance_factor":   (1.5,  15.0),
-        "band_energy_1_5kHz": (100.0, 80000.0),
-        "snr_estimated":      (-5.0,  40.0),
-    }
-    for feat in VIBRATION_FEATURE_COLS:
-        lo, hi = random_ranges[feat]
-        val = round(float(rng.uniform(lo, hi)), 4)
-        st.session_state[f"num_{feat}"] = val
-        desc, s_min, s_max, _, _ = FEATURE_DESCRIPTIONS[feat]
-        st.session_state[f"slider_{feat}"] = float(np.clip(val, s_min, s_max))
-
-
-# ---- sidebar --------------------------------------------------------------
-
-with st.sidebar:
-    st.markdown("### Configuration")
-    st.markdown("---")
-
-    mode = st.radio("Input Mode", ["Manual Input", "CSV Upload"], index=0)
-
-    st.markdown("---")
-    st.markdown("### Email Settings")
-    email_enabled = st.toggle("Enable Email Alerts", value=False)
-    if email_enabled:
-        smtp_server = st.text_input("SMTP Server", "smtp.gmail.com")
-        smtp_port = st.number_input("Port", value=587, step=1)
-        email_user = st.text_input("Username / Email")
-        email_pass = st.text_input("Password", type="password")
-        recipients = st.text_area("Recipients (one per line)", "maintainer@example.com")
-        from_addr = st.text_input("From Address", "predictive.maintenance@caterpillar.com")
-        st.caption(
-            "For Gmail, use an App Password: "
-            "https://myaccount.google.com/apppasswords"
-        )
-
-    st.markdown("---")
-    st.markdown("### Machine Context")
-    machine_id = st.selectbox("Machine ID", MACHINE_IDS)
-
-
-# ---- header ---------------------------------------------------------------
-
-st.markdown("""
-<div class="hero-card">
-    <h1>Caterpillar Predictive Maintenance</h1>
-    <p>CNN-LSTM Deep Learning Model &bull; Real-Time Fault Detection &bull; Automated Alerts</p>
-</div>
-""", unsafe_allow_html=True)
-
-
-# ---- main content ---------------------------------------------------------
-
-session = load_onnx_session()
-meta = load_metadata()
-
-if session is None or meta is None:
-    st.warning(
-        "Model files not found. Please run the training pipeline first:\n\n"
-        "```bash\n"
-        "python src/generate_dataset.py\n"
-        "python src/train.py\n"
-        "python src/export_onnx.py\n"
-        "```"
-    )
+if model is None:
+    st.error("Model artifacts not found! Please ensure 'a.py' has been run to train and save the model.")
     st.stop()
 
+st.title("Predictive Maintenance Diagnostic Dashboard")
 
-# -- Manual Input Mode --
+# Feature ranges strictly within the min/max bounds present in synthetic_vibration_data.csv
+RANGES = {
+    "machine_id_encoded": (0.0, 4.0),
+    "operating_speed_rpm": (574.4, 3008.2),
+    "load_percentage": (15.0, 100.0),
+    "temperature_celsius": (35.0, 137.4),
+    "rms": (0.1798, 2.7114),
+    "peak_to_peak": (0.9347, 22.3976),
+    "kurtosis": (-1.6356, 5.4025),
+    "skewness": (-1.5817, 1.6560),
+    "crest_factor": (1.5722, 11.3677),
+    "spectral_centroid": (790.0052, 2798.1028),
+    "spectral_bandwidth": (1311.8097, 1983.0100),
+    "spectral_rolloff": (12.2070, 4890.1367),
+    "dominant_frequency": (9.7656, 4699.7070),
+    "frequency_rms": (11.5074, 173.5098),
+    "entropy": (2.6264, 4.0976),
+    "impulse_factor": (1.7240, 15.5052),
+    "clearance_factor": (1.8631, 19.3171),
+    "band_energy_1_5kHz": (3110.0379, 6267250.7292),
+    "snr_estimated": (-27.9704, -7.3438),
+}
 
-if mode == "Manual Input":
-    st.markdown('<div class="section-header">Enter Vibration Features</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Provide the 15 engineered features from the vibration sensor reading. The selected Machine ID is automatically encoded and fed to the model.</div>', unsafe_allow_html=True)
+HARDCODED_NORMAL = {
+    "machine_id_encoded": 1.0,
+    "operating_speed_rpm": 1794.9,
+    "load_percentage": 48.5,
+    "temperature_celsius": 86.8,
+    "rms": 0.39956,
+    "peak_to_peak": 2.472235,
+    "kurtosis": 0.145224,
+    "skewness": -0.618266,
+    "crest_factor": 3.755717,
+    "spectral_centroid": 1362.514,
+    "spectral_bandwidth": 1579.7778,
+    "spectral_rolloff": 119.6289,
+    "dominant_frequency": 29.2969,
+    "frequency_rms": 25.565756,
+    "entropy": 3.666511,
+    "impulse_factor": 4.849179,
+    "clearance_factor": 5.841148,
+    "band_energy_1_5kHz": 21809.5097,
+    "snr_estimated": -18.1239
+}
 
-    # Randomize button
-    col_rand, col_spacer = st.columns([1, 3])
-    with col_rand:
-        if st.button("Randomize All Inputs", use_container_width=True, key="randomize_btn"):
-            randomize_features()
-            st.rerun()
+# Ensure hardcoded normal values stay within ranges
+for k, v in HARDCODED_NORMAL.items():
+    min_v, max_v = RANGES[k]
+    HARDCODED_NORMAL[k] = max(min_v, min(max_v, v))
 
-    st.markdown("")
+if "features" not in st.session_state:
+    st.session_state.features = {k: float(RANGES[k][0]) for k in FEATURE_COLS}
 
-    # Feature input grid: 3 columns
-    cols = st.columns(3)
-    for i, feat in enumerate(VIBRATION_FEATURE_COLS):
-        desc, slider_min, slider_max, default, step_val = FEATURE_DESCRIPTIONS[feat]
+@st.cache_data
+def load_sample_data():
+    if os.path.exists("synthetic_vibration_data.csv"):
+        df = pd.read_csv("synthetic_vibration_data.csv")
+        normal_df = df[df['fault_present'] == 0]
+        faulty_df = df[df['fault_present'] == 1]
+        return normal_df, faulty_df
+    return None, None
 
-        with cols[i % 3]:
-            st.markdown(f'<div class="feature-card"><div class="feat-label">{desc}</div></div>', unsafe_allow_html=True)
+normal_df, faulty_df = load_sample_data()
 
-            st.number_input(
-                desc,
-                value=float(default),
-                step=step_val,
-                format="%.4f",
-                key=f"num_{feat}",
-                on_change=_sync_from_number,
-                args=(feat,),
-                label_visibility="collapsed",
-            )
+def randomize_features(mode="any"):
+    if mode == "normal":
+        for k in FEATURE_COLS:
+            st.session_state.features[k] = float(HARDCODED_NORMAL[k])
+    elif mode == "faulty" and faulty_df is not None and not faulty_df.empty:
+        row = faulty_df.sample(1).iloc[0]
+        for k in FEATURE_COLS:
+            st.session_state.features[k] = float(row[k])
+    else:
+        for k in FEATURE_COLS:
+            min_v, max_v = RANGES[k]
+            st.session_state.features[k] = float(np.random.uniform(min_v, max_v))
 
-            st.slider(
-                f"{desc} slider",
-                min_value=float(slider_min),
-                max_value=float(slider_max),
-                value=float(default),
-                step=step_val,
-                key=f"slider_{feat}",
-                on_change=_sync_from_slider,
-                args=(feat,),
-                label_visibility="collapsed",
-            )
+def send_email(subject, body, to_email, sender_email, sender_password):
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    if not sender_email or not sender_password:
+        st.error("Please configure the SMTP Sender Email and Password in the sidebar.")
+        return False
+        
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        text = msg.as_string()
+        server.sendmail(sender_email, to_email, text)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+        st.error(f"Failed to send email. Verify your credentials. Error: {e}")
+        return False
 
-    st.markdown("---")
+with st.sidebar:
+    st.header("Email Configuration (Gmail)")
+    st.session_state.sender_email = st.text_input("Sender Email", value=st.session_state.get("sender_email", ""))
+    st.session_state.sender_password = st.text_input("App Password", value=st.session_state.get("sender_password", ""), type="password", help="Use a Gmail App Password, not your standard account password.")
+    st.divider()
+    
+    st.header("Input Features")
+    # Quick fill buttons
+    c1, c2 = st.columns(2)
+    with c1:
+        st.button("Random Any", on_click=randomize_features, args=("any",), use_container_width=True)
+        st.button("Set Faulty", on_click=randomize_features, args=("faulty",), use_container_width=True)
+    with c2:
+        st.button("Set Normal", on_click=randomize_features, args=("normal",), use_container_width=True)
 
-    if st.button("Run Prediction", use_container_width=True):
-        # build 16-feature vector: 15 vibration + machine_id_encoded
-        vib_features = [st.session_state[f"num_{f}"] for f in VIBRATION_FEATURE_COLS]
-        machine_encoded = float(MACHINE_ID_MAP[machine_id])
-        features = np.array(vib_features + [machine_encoded], dtype=np.float32)
-        result = predict(session, features, meta)
+    st.divider()
 
-        # -- results display --
-        st.markdown('<div class="section-header">Prediction Results</div>', unsafe_allow_html=True)
-
-        r1, r2, r3, r4 = st.columns(4)
-        with r1:
-            fault_display = result["fault_class"].replace("_", " ").title()
-            badge_class = "badge-high" if "severe" in result["fault_class"] or "combined" in result["fault_class"] \
-                else ("badge-early" if "early" in result["fault_class"] else "badge-normal")
-            sev_text = "SEVERE" if "severe" in result["fault_class"] or "combined" in result["fault_class"] \
-                else ("EARLY" if "early" in result["fault_class"] else "NORMAL")
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="label">Detected Fault</div>
-                <div class="value" style="font-size: 18px;">{fault_display}</div>
-                <div style="margin-top: 8px;"><span class="{badge_class}">{sev_text}</span></div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with r2:
-            conf_color = "#10b981" if result["confidence"] > 0.8 else "#f59e0b"
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="label">Confidence</div>
-                <div class="value" style="color: {conf_color};">{result['confidence']:.1%}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with r3:
-            ef_color = "#ef4444" if result["early_fault_probability"] > 0.5 else "#10b981"
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="label">Early Fault Prob.</div>
-                <div class="value" style="color: {ef_color};">{result['early_fault_probability']:.1%}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with r4:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="label">Machine</div>
-                <div class="value" style="font-size: 18px;">{machine_id}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # Confidence gauge
-        st.markdown("#### Confidence Gauge")
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=result["confidence"] * 100,
-            number={"suffix": "%", "font": {"color": "#1f2937"}},
-            gauge={
-                "axis": {"range": [0, 100], "tickcolor": "#9ca3af"},
-                "bar": {"color": "#6366f1"},
-                "bgcolor": "#f3f4f6",
-                "bordercolor": "#d1d5db",
-                "steps": [
-                    {"range": [0, 50], "color": "#fef2f2"},
-                    {"range": [50, 80], "color": "#fefce8"},
-                    {"range": [80, 100], "color": "#f0fdf4"},
-                ],
-                "threshold": {
-                    "line": {"color": "#ef4444", "width": 3},
-                    "thickness": 0.8,
-                    "value": 90,
-                },
-            },
-            title={"text": "Model Confidence", "font": {"color": "#6b7280", "size": 14}},
-        ))
-        fig_gauge.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            height=280,
-            margin=dict(t=40, b=20, l=40, r=40),
+    for k in FEATURE_COLS:
+        min_v, max_v = RANGES[k]
+        current_val = float(st.session_state.features.get(k, min_v))
+        val = st.number_input(
+            label=k.replace('_', ' ').title(),
+            min_value=float(min_v),
+            max_value=float(max_v),
+            value=float(current_val),
+            format="%.4f"
         )
-        st.plotly_chart(fig_gauge, use_container_width=True)
-
-        # Class probabilities
-        st.markdown("#### Class Probability Distribution")
-        prob_df = pd.DataFrame(
-            list(result["probabilities"].items()),
-            columns=["Fault Class", "Probability"],
-        ).sort_values("Probability", ascending=True)
-
-        fig_bar = px.bar(
-            prob_df, x="Probability", y="Fault Class", orientation="h",
-            color="Probability",
-            color_continuous_scale=["#e0e7ff", "#6366f1", "#ef4444"],
-        )
-        fig_bar.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#374151",
-            height=350,
-            margin=dict(t=20, b=20),
-            showlegend=False,
-            xaxis=dict(gridcolor="rgba(0,0,0,0.06)"),
-            yaxis=dict(gridcolor="rgba(0,0,0,0.06)"),
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-        # Email alert section
-        if result["fault_class"] != "normal":
-            st.markdown("---")
-            st.markdown("### Send Maintenance Alert")
-
-            # Preview email
-            from src.notifier import preview_email, send_alert
-            email_html = preview_email(
-                fault_class=result["fault_class"],
-                confidence=result["confidence"],
-                severity=result["early_fault_probability"],
-                machine_id=machine_id,
-            )
-            with st.expander("Preview Email Content"):
-                st.components.v1.html(email_html, height=450, scrolling=True)
-
-            if email_enabled:
-                if st.button("Send Alert Email Now", use_container_width=True):
-                    email_cfg = {
-                        "smtp_server": smtp_server,
-                        "smtp_port": smtp_port,
-                        "use_tls": True,
-                        "username": email_user,
-                        "password": email_pass,
-                        "from_address": from_addr,
-                        "recipients": [r.strip() for r in recipients.strip().split("\n") if r.strip()],
-                        "subject_prefix": "[FAULT ALERT]",
-                    }
-                    success, message = send_alert(
-                        fault_class=result["fault_class"],
-                        confidence=result["confidence"],
-                        severity=result["early_fault_probability"],
-                        machine_id=machine_id,
-                        email_cfg=email_cfg,
-                    )
-                    if success:
-                        st.success(message)
-                    else:
-                        st.error(message)
-            else:
-                st.info("Enable Email Alerts in the sidebar to send notifications.")
+        st.session_state.features[k] = val
 
 
-# -- CSV Upload Mode --
+# Run Inference
+st.subheader("Model Inference")
 
-elif mode == "CSV Upload":
-    st.markdown('<div class="section-header">Upload Sensor Data CSV</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-sub">Upload a CSV with the 15 vibration feature columns + machine_id (or machine_id_encoded) for batch prediction.</div>', unsafe_allow_html=True)
+if st.button("Predict", type="primary"):
+    st.session_state.show_prediction = True
 
-    uploaded = st.file_uploader("Choose a CSV file", type=["csv"])
-
-    if uploaded is not None:
-        df = pd.read_csv(uploaded)
-        st.markdown(f"**Rows loaded:** {len(df)}")
-
-        # check vibration columns
-        missing = [c for c in VIBRATION_FEATURE_COLS if c not in df.columns]
-        if missing:
-            st.error(f"Missing columns: {missing}")
-            st.stop()
-
-        # handle machine_id encoding
-        if "machine_id_encoded" not in df.columns:
-            if "machine_id" in df.columns:
-                df["machine_id_encoded"] = df["machine_id"].map(MACHINE_ID_MAP).fillna(0).astype(int)
-            else:
-                st.warning("No machine_id column found. Using default (0).")
-                df["machine_id_encoded"] = 0
-
-        st.dataframe(df.head(10), use_container_width=True)
-
-        if st.button("Run Batch Prediction", use_container_width=True):
-            results = []
-            progress = st.progress(0)
-            for i, row in df.iterrows():
-                features = np.array([row[f] for f in ALL_FEATURE_COLS], dtype=np.float32)
-                res = predict(session, features, meta)
-                res["row_index"] = i
-                results.append(res)
-                progress.progress((i + 1) / len(df))
-
-            res_df = pd.DataFrame(results)
-            st.markdown("### Batch Results")
-
-            c1, c2, c3 = st.columns(3)
-            fault_count = (res_df["fault_class"] != "normal").sum()
-            early_count = res_df["is_early_fault"].sum()
-            with c1:
-                st.metric("Total Samples", len(res_df))
-            with c2:
-                st.metric("Faults Detected", int(fault_count))
-            with c3:
-                st.metric("Early-Stage Faults", int(early_count))
-
-            class_counts = res_df["fault_class"].value_counts()
-            fig_pie = px.pie(
-                values=class_counts.values,
-                names=class_counts.index,
-                color_discrete_sequence=px.colors.sequential.Purples_r,
-                hole=0.4,
-            )
-            fig_pie.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#374151",
-                height=400,
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-            display_df = res_df[["row_index", "fault_class", "confidence", "early_fault_probability", "is_early_fault"]]
-            st.dataframe(display_df, use_container_width=True)
-
-            csv = display_df.to_csv(index=False)
-            st.download_button("Download Results CSV", csv, "predictions.csv", "text/csv")
-
-            if fault_count > 0 and email_enabled:
+if st.session_state.get("show_prediction", False):
+    # Sequence length that was used during training
+    seq_len = checkpoint.get("seq_len", 24)
+    feat_vector = np.array([st.session_state.features[k] for k in FEATURE_COLS], dtype=np.float32)
+    
+    # Broadcast to (seq_len, num_features) to simulate a steady window
+    x_win = np.tile(feat_vector, (seq_len, 1))
+    
+    # Validate scaler features
+    expected_features = scaler.n_features_in_
+    if expected_features != len(FEATURE_COLS):
+        st.warning(f"Scaler expects {expected_features} features, but {len(FEATURE_COLS)} provided. This might cause shape errors if dataset feature cols changed.")
+    
+    try:
+        # Scale
+        x_win_scaled = scaler.transform(x_win)
+        
+        # Batch dimension
+        x_tensor = torch.tensor(x_win_scaled, dtype=torch.float32).unsqueeze(0) # [1, 24, 19]
+        
+        device = next(model.parameters()).device
+        x_tensor = x_tensor.to(device)
+        
+        with torch.no_grad():
+            bin_logit, multi_logit = model(x_tensor)
+            bin_prob = 1.0 / (1.0 + np.exp(-bin_logit.cpu().numpy()))[0]
+            multi_logits_arr = multi_logit.cpu().numpy()[0]
+            multi_probs = np.exp(multi_logits_arr) / np.sum(np.exp(multi_logits_arr))
+            
+        threshold = checkpoint.get("threshold", 0.5)
+        pred_class = FAULT_LABELS[np.argmax(multi_probs)]
+        human_readable_class = pred_class.replace('_', ' ').title()
+        
+        # Display Results
+        col1, col2 = st.columns([1, 1.2])
+        
+        with col1:
+            st.markdown("### Structural Integrity Assessment")
+            is_fault = bin_prob >= threshold
+            if is_fault:
+                st.error(f"ALERT: Structural Anomaly Detected\nProbability: {bin_prob:.4f} (Threshold: {threshold:.4f})")
+                
                 st.markdown("---")
-                if st.button("Send Batch Alert Email", use_container_width=True):
-                    from src.notifier import send_alert
-                    email_cfg = {
-                        "smtp_server": smtp_server,
-                        "smtp_port": smtp_port,
-                        "use_tls": True,
-                        "username": email_user,
-                        "password": email_pass,
-                        "from_address": from_addr,
-                        "recipients": [r.strip() for r in recipients.strip().split("\n") if r.strip()],
-                        "subject_prefix": "[FAULT ALERT - BATCH]",
-                    }
-                    worst = res_df.loc[res_df["confidence"].idxmax()]
-                    success, message = send_alert(
-                        fault_class=worst["fault_class"],
-                        confidence=worst["confidence"],
-                        severity=worst["early_fault_probability"],
-                        machine_id=machine_id,
-                        email_cfg=email_cfg,
-                    )
-                    if success:
-                        st.success(message)
-                    else:
-                        st.error(message)
-
-
-# ---- footer ---------------------------------------------------------------
-
-st.markdown("---")
-st.markdown(
-    "<p style='text-align: center; color: #9ca3af; font-size: 12px;'>"
-    "Caterpillar Inc. - Predictive Maintenance Health Monitoring System | "
-    f"Built with Streamlit | {datetime.now().year}"
-    "</p>",
-    unsafe_allow_html=True,
-)
+                st.markdown("#### Automated Alert Dispatch")
+                with st.form("email_dispatch_form"):
+                    recipient = st.text_input("Maintainer Email", value="wadhwasanjam@gmail.com")
+                    alert_body = f"System Check Failure:\nA predictive maintenance alert has been triggered for machine index {st.session_state.features.get('machine_id_encoded')}.\n\nAnomaly Probability: {bin_prob:.4f}\nPrimary Suspect Parameter: {human_readable_class}\n\nImmediate physical inspection required."
+                    body = st.text_area("Alert Context", value=alert_body, height=170)
+                    submitted = st.form_submit_button("Dispatch Security Alert")
+                    if submitted:
+                        if send_email("Alert: Potential Machine Fault Detected", body, recipient, st.session_state.sender_email, st.session_state.sender_password):
+                            st.success(f"Alert successfully dispatched to {recipient}.")
+                            
+            else:
+                st.success(f"SYSTEM NOMINAL\nProbability: {bin_prob:.4f} (Threshold: {threshold:.4f})")
+                
+            fig_gauge = go.Figure(go.Indicator(
+                mode = "gauge+number+delta",
+                value = bin_prob,
+                title = {'text': "Anomaly Confidence"},
+                delta = {'reference': threshold, 'increasing': {'color': "red"}, 'decreasing': {'color': "green"}},
+                gauge = {
+                    'axis': {'range': [0, 1]},
+                    'bar': {'color': "darkred" if is_fault else "darkgreen"},
+                    'steps': [
+                        {'range': [0, threshold], 'color': "lightgreen"},
+                        {'range': [threshold, 1], 'color': "lightcoral"}
+                    ]
+                }
+            ))
+            st.plotly_chart(fig_gauge, use_container_width=True)
+            
+        with col2:
+            st.markdown("### Probabilistic Class Breakdown")
+            
+            fault_df = pd.DataFrame({
+                "Fault Classification": [lbl.replace('_', ' ').title() for lbl in FAULT_LABELS],
+                "Confidence": multi_probs
+            })
+            fault_df = fault_df.sort_values(by="Confidence", ascending=True)
+            
+            fig_bar = px.bar(fault_df, x="Confidence", y="Fault Classification", orientation='h')
+            fig_bar.update_traces(marker_color='#4A90E2')
+            fig_bar.update_layout(margin=dict(l=20, r=20, t=40, b=20), height=400)
+            st.plotly_chart(fig_bar, use_container_width=True)
+            
+            if is_fault:
+                st.warning(f"Primary Suspect Parameter: {human_readable_class}")
+            else:
+                st.info("System operations are stable. Highlighted categorizations represent environmental artifact weighting.")
+                
+    except Exception as e:
+        st.error(f"Inference execution failed: {e}")
